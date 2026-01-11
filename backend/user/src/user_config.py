@@ -6,7 +6,7 @@ Functionality:
 
 from typing import TypedDict
 
-from common.src.es_connect import ElasticWrap
+from common.src.config_store_factory import get_config_store_singleton
 
 
 class UserConfigType(TypedDict, total=False):
@@ -61,17 +61,13 @@ class UserConfig:
 
     def __init__(self, user_id: str):
         self._user_id: str = user_id
+        self.store = get_config_store_singleton()
         self._config: UserConfigType = self.get_config()
 
     @property
-    def es_url(self) -> str:
-        """es URL"""
-        return f"ta_config/_doc/user_{self._user_id}"
-
-    @property
-    def es_update_url(self) -> str:
-        """es update URL"""
-        return f"ta_config/_update/user_{self._user_id}"
+    def config_key(self) -> str:
+        """configuration key for this user"""
+        return f"user_{self._user_id}"
 
     def get_value(self, key: str):
         """Get the given key from the users configuration
@@ -83,31 +79,31 @@ class UserConfig:
 
     def set_value(self, key: str, value: str | bool | int):
         """Set or replace a configuration value for the user"""
-        data = {"doc": {"config": {key: value}}}
-        response, status = ElasticWrap(self.es_update_url).post(data)
+        updates = {"config": {key: value}}
+        response, status = self.store.update(self.config_key, updates)
         if status < 200 or status > 299:
             raise ValueError(f"Failed storing user value {status}: {response}")
 
         print(f"User {self._user_id} value '{key}' change: to {value}")
 
     def get_config(self) -> UserConfigType:
-        """get config from ES or load from the application defaults"""
+        """get config from datastore or load from the application defaults"""
         if not self._user_id:
             raise ValueError("no user_id passed")
 
-        response, status = ElasticWrap(self.es_url).get(print_error=False)
+        data, status = self.store.get(self.config_key)
         if status == 404:
             self.sync_defaults()
             config = self._DEFAULT_USER_SETTINGS
         else:
-            config = self.sync_new_defaults(response["_source"]["config"])
+            config = self.sync_new_defaults(data["config"])  # type: ignore
 
         return config
 
     def update_config(self, to_update: dict) -> None:
         """update config object"""
-        data = {"doc": {"config": to_update}}
-        response, status = ElasticWrap(self.es_update_url).post(data)
+        updates = {"config": to_update}
+        response, status = self.store.update(self.config_key, updates)
         if status < 200 or status > 299:
             raise ValueError(f"Failed storing user value {status}: {response}")
 
@@ -116,8 +112,8 @@ class UserConfig:
 
     def sync_defaults(self):
         """set initial defaults on 404"""
-        response, _ = ElasticWrap(self.es_url).post(
-            {"config": self._DEFAULT_USER_SETTINGS}
+        response, _ = self.store.set(
+            self.config_key, {"config": self._DEFAULT_USER_SETTINGS}
         )
         print(f"set default config for user {self._user_id}: {response}")
 

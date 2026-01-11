@@ -10,7 +10,7 @@ from typing import Literal, TypedDict
 
 import requests
 from appsettings.src.snapshot import ElasticSnapshot
-from common.src.es_connect import ElasticWrap
+from common.src.config_store_factory import get_config_store_singleton
 from common.src.ta_redis import RedisArchivist
 from django.conf import settings
 
@@ -66,8 +66,7 @@ class AppConfigType(TypedDict):
 class AppConfig:
     """handle application variables"""
 
-    ES_PATH = "ta_config/_doc/appsettings"
-    ES_UPDATE_PATH = "ta_config/_update/appsettings"
+    CONFIG_KEY = "appsettings"
     CONFIG_DEFAULTS: AppConfigType = {
         "subscriptions": {
             "channel_size": 50,
@@ -103,15 +102,16 @@ class AppConfig:
     }
 
     def __init__(self):
+        self.store = get_config_store_singleton()
         self.config = self.get_config()
 
     def get_config(self) -> AppConfigType:
-        """get config from ES"""
-        response, status_code = ElasticWrap(self.ES_PATH).get()
-        if not status_code == 200:
-            raise ValueError(f"no config found at {self.ES_PATH}")
+        """get config from datastore"""
+        config, status_code = self.store.get(self.CONFIG_KEY)
+        if status_code != 200:
+            raise ValueError(f"no config found for key {self.CONFIG_KEY}")
 
-        return response["_source"]
+        return config  # type: ignore
 
     def update_config(self, data: dict) -> AppConfigType:
         """update single config value"""
@@ -126,8 +126,8 @@ class AppConfig:
             else:
                 new_config[key] = value
 
-        response, status_code = ElasticWrap(self.ES_PATH).post(new_config)
-        if not status_code == 200:
+        response, status_code = self.store.set(self.CONFIG_KEY, new_config)
+        if status_code not in (200, 201):
             print(response)
 
         self.config = new_config
@@ -156,7 +156,7 @@ class AppConfig:
 
     def sync_defaults(self):
         """sync defaults at startup, needs to be called with __new__"""
-        return ElasticWrap(self.ES_PATH).post(self.CONFIG_DEFAULTS)
+        return self.store.set(self.CONFIG_KEY, self.CONFIG_DEFAULTS)
 
     def add_new_defaults(self) -> list[str]:
         """add new default config values to ES, called at startup"""

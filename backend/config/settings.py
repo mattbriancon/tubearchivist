@@ -228,6 +228,11 @@ except ValueError:
     # fails in unittests bootstrap
     pass
 
+# Datastore backend configuration
+# Supported values: "elasticsearch" (default), "sqlite"
+# This controls which backend is used for configuration storage (ta_config)
+CONFIG_STORE_BACKEND = environ.get("CONFIG_STORE_BACKEND", "elasticsearch")
+
 # API
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
