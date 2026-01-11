@@ -19,7 +19,7 @@ def get_config_store() -> ConfigStore:
 
     Supported backends:
     - "elasticsearch" (default): Use Elasticsearch ta_config index
-    - "sqlite": Use SQLite ConfigData table
+    - "model": Use Django ORM (works with any DB: SQLite, PostgreSQL, MySQL, etc.)
 
     Returns:
         ConfigStore instance
@@ -31,7 +31,7 @@ def get_config_store() -> ConfigStore:
         from common.src.config_store_factory import get_config_store
 
         store = get_config_store()
-        config, status = store.get("appsettings")
+        config = store.get("appsettings")
     """
     backend = getattr(settings, "CONFIG_STORE_BACKEND", "elasticsearch").lower()
 
@@ -41,44 +41,12 @@ def get_config_store() -> ConfigStore:
         )
 
         return ElasticsearchConfigStore()
-    elif backend == "sqlite":
-        from common.src.adapters.sqlite.config_store import SQLiteConfigStore
+    elif backend in ("model", "sqlite"):  # Accept 'sqlite' for backwards compat
+        from common.src.adapters.model.config_store import ModelConfigStore
 
-        return SQLiteConfigStore()
+        return ModelConfigStore()
     else:
         raise ValueError(
             f"Unsupported CONFIG_STORE_BACKEND: {backend}. "
-            f"Supported: 'elasticsearch', 'sqlite'"
+            f"Supported: 'elasticsearch', 'model'"
         )
-
-
-# Singleton instance for reuse
-_config_store_instance: ConfigStore | None = None
-
-
-def get_config_store_singleton() -> ConfigStore:
-    """
-    Get or create a singleton ConfigStore instance.
-
-    This avoids recreating the store on every call, which is useful
-    for performance and connection pooling.
-
-    Returns:
-        ConfigStore instance (cached)
-    """
-    global _config_store_instance
-
-    if _config_store_instance is None:
-        _config_store_instance = get_config_store()
-
-    return _config_store_instance
-
-
-def reset_config_store_singleton() -> None:
-    """
-    Reset the singleton ConfigStore instance.
-
-    Useful for testing or when switching backends at runtime.
-    """
-    global _config_store_instance
-    _config_store_instance = None

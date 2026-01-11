@@ -229,7 +229,9 @@ except ValueError:
     pass
 
 # Datastore backend configuration
-# Supported values: "elasticsearch" (default), "sqlite"
+# Supported values:
+#   - "elasticsearch" (default): Use Elasticsearch ta_config index
+#   - "model": Use Django ORM (works with SQLite, PostgreSQL, MySQL, etc.)
 # This controls which backend is used for configuration storage (ta_config)
 CONFIG_STORE_BACKEND = environ.get("CONFIG_STORE_BACKEND", "elasticsearch")
 

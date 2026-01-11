@@ -1,28 +1,29 @@
 """
-Django management command to migrate configuration data from Elasticsearch to SQLite.
+Django management command to migrate configuration data from Elasticsearch to database.
 
 Usage:
     python manage.py migrate_config_to_sqlite [--dry-run] [--verbose]
 
 Options:
-    --dry-run: Preview what would be migrated without actually writing to SQLite
+    --dry-run: Preview what would be migrated without actually writing to database
     --verbose: Show detailed output for each configuration key migrated
 """
 
 from django.core.management.base import BaseCommand
 
 from common.src.adapters.elasticsearch.config_store import ElasticsearchConfigStore
-from common.src.adapters.sqlite.config_store import SQLiteConfigStore
+from common.src.adapters.model.config_store import ModelConfigStore
+from common.src.interfaces.config_store import ConfigNotFoundError
 
 
 class Command(BaseCommand):
-    help = "Migrate configuration data from Elasticsearch to SQLite"
+    help = "Migrate configuration data from Elasticsearch to database (via Django ORM)"
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Preview migration without writing to SQLite",
+            help="Preview migration without writing to database",
         )
         parser.add_argument(
             "--verbose",
@@ -42,7 +43,7 @@ class Command(BaseCommand):
         # Initialize both stores
         self.stdout.write("Initializing datastores...")
         es_store = ElasticsearchConfigStore()
-        sqlite_store = SQLiteConfigStore()
+        model_store = ModelConfigStore()
 
         # Get all keys from Elasticsearch
         self.stdout.write("Fetching configuration keys from Elasticsearch...")
@@ -68,21 +69,28 @@ class Command(BaseCommand):
         skipped = 0
 
         for key in all_keys:
-            # Check if already exists in SQLite
-            if sqlite_store.exists(key):
+            # Check if already exists in database
+            if model_store.exists(key):
                 if verbose:
                     self.stdout.write(
-                        self.style.WARNING(f"  ⊘ {key} - already exists in SQLite")
+                        self.style.WARNING(f"  ⊘ {key} - already exists in database")
                     )
                 skipped += 1
                 continue
 
             # Get data from Elasticsearch
-            data, status = es_store.get(key)
-            if status != 200:
+            try:
+                data = es_store.get(key)
+            except ConfigNotFoundError:
+                self.stdout.write(
+                    self.style.ERROR(f"  ✗ {key} - not found in Elasticsearch")
+                )
+                failed += 1
+                continue
+            except Exception as e:
                 self.stdout.write(
                     self.style.ERROR(
-                        f"  ✗ {key} - failed to read from Elasticsearch (status {status})"
+                        f"  ✗ {key} - failed to read from Elasticsearch: {e}"
                     )
                 )
                 failed += 1
@@ -91,21 +99,13 @@ class Command(BaseCommand):
             if verbose:
                 self.stdout.write(f"  → {key} - read from Elasticsearch")
 
-            # Write to SQLite (unless dry run)
+            # Write to database (unless dry run)
             if not dry_run:
                 try:
-                    _, write_status = sqlite_store.set(key, data)
-                    if write_status not in (200, 201):
-                        self.stdout.write(
-                            self.style.ERROR(
-                                f"  ✗ {key} - failed to write to SQLite (status {write_status})"
-                            )
-                        )
-                        failed += 1
-                        continue
+                    model_store.set(key, data)
                 except Exception as e:
                     self.stdout.write(
-                        self.style.ERROR(f"  ✗ {key} - error writing to SQLite: {e}")
+                        self.style.ERROR(f"  ✗ {key} - error writing to database: {e}")
                     )
                     failed += 1
                     continue
@@ -138,13 +138,11 @@ class Command(BaseCommand):
                 "\n" + self.style.SUCCESS("✓ Migration completed successfully!")
             )
             self.stdout.write(
-                "\nTo use SQLite for config storage, set environment variable:"
+                "\nTo use database for config storage, set environment variable:"
             )
-            self.stdout.write("  CONFIG_STORE_BACKEND=sqlite")
+            self.stdout.write("  CONFIG_STORE_BACKEND=model")
         else:
             self.stdout.write(
                 "\n"
-                + self.style.ERROR(
-                    f"⚠ Migration completed with {failed} error(s)"
-                )
+                + self.style.ERROR(f"⚠ Migration completed with {failed} error(s)")
             )

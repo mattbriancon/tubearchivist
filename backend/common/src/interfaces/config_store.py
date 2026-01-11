@@ -9,6 +9,14 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class ConfigNotFoundError(Exception):
+    """Raised when a configuration key is not found."""
+
+    def __init__(self, key: str):
+        self.key = key
+        super().__init__(f"Configuration not found: {key}")
+
+
 class ConfigStore(ABC):
     """
     Abstract base class for configuration storage backends.
@@ -17,16 +25,12 @@ class ConfigStore(ABC):
     - key: string identifier (e.g., "appsettings", "user_{user_id}")
     - value: dict containing configuration data
 
-    Implementations must handle:
-    - Full document retrieval (get)
-    - Full document replacement (set)
-    - Partial document updates (update)
-    - Document deletion (delete)
-    - Existence checks (exists)
+    Operations raise ConfigNotFoundError when a key doesn't exist.
+    Other errors raise appropriate exceptions (ValueError, etc.).
     """
 
     @abstractmethod
-    def get(self, key: str) -> tuple[dict[str, Any] | None, int]:
+    def get(self, key: str) -> dict[str, Any]:
         """
         Retrieve configuration data for the given key.
 
@@ -34,18 +38,21 @@ class ConfigStore(ABC):
             key: Configuration key (e.g., "appsettings", "user_123")
 
         Returns:
-            Tuple of (data, status_code) where:
-            - data: Configuration dict if found, None if not found
-            - status_code: HTTP-style status code (200=success, 404=not found, etc.)
+            Configuration dict
+
+        Raises:
+            ConfigNotFoundError: If the key doesn't exist
 
         Example:
-            config, status = store.get("appsettings")
-            if status == 200:
+            try:
+                config = store.get("appsettings")
                 print(config["subscriptions"]["channel_size"])
+            except ConfigNotFoundError:
+                print("Config not found")
         """
 
     @abstractmethod
-    def set(self, key: str, value: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    def set(self, key: str, value: dict[str, Any]) -> None:
         """
         Store or replace configuration data for the given key.
 
@@ -55,18 +62,16 @@ class ConfigStore(ABC):
             key: Configuration key
             value: Complete configuration dict to store
 
-        Returns:
-            Tuple of (response, status_code) where:
-            - response: Backend-specific response (e.g., ES response, row data)
-            - status_code: HTTP-style status code (200=success, 201=created, etc.)
+        Raises:
+            ValueError: If value is invalid
 
         Example:
             config = {"subscriptions": {"channel_size": 50}}
-            response, status = store.set("appsettings", config)
+            store.set("appsettings", config)
         """
 
     @abstractmethod
-    def update(self, key: str, updates: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    def update(self, key: str, updates: dict[str, Any]) -> None:
         """
         Update specific fields in the configuration document.
 
@@ -77,32 +82,29 @@ class ConfigStore(ABC):
             key: Configuration key
             updates: Dict containing fields to update
 
-        Returns:
-            Tuple of (response, status_code) where:
-            - response: Backend-specific response
-            - status_code: HTTP-style status code (200=success, 404=not found, etc.)
+        Raises:
+            ConfigNotFoundError: If the key doesn't exist
+            ValueError: If updates are invalid
 
         Example:
             # Only update channel_size, leave other fields unchanged
             updates = {"subscriptions": {"channel_size": 100}}
-            response, status = store.update("appsettings", updates)
+            store.update("appsettings", updates)
         """
 
     @abstractmethod
-    def delete(self, key: str) -> tuple[dict[str, Any], int]:
+    def delete(self, key: str) -> None:
         """
         Delete configuration data for the given key.
 
         Args:
             key: Configuration key to delete
 
-        Returns:
-            Tuple of (response, status_code) where:
-            - response: Backend-specific response
-            - status_code: HTTP-style status code (200=success, 404=not found, etc.)
+        Raises:
+            ConfigNotFoundError: If the key doesn't exist
 
         Example:
-            response, status = store.delete("user_123")
+            store.delete("user_123")
         """
 
     @abstractmethod
@@ -118,7 +120,7 @@ class ConfigStore(ABC):
 
         Example:
             if store.exists("appsettings"):
-                config, _ = store.get("appsettings")
+                config = store.get("appsettings")
         """
 
     @abstractmethod

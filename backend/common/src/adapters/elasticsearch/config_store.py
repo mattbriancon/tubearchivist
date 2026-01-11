@@ -8,7 +8,7 @@ data in the ta_config index.
 from typing import Any
 
 from common.src.es_connect import ElasticWrap
-from common.src.interfaces.config_store import ConfigStore
+from common.src.interfaces.config_store import ConfigNotFoundError, ConfigStore
 
 
 class ElasticsearchConfigStore(ConfigStore):
@@ -39,10 +39,6 @@ class ElasticsearchConfigStore(ConfigStore):
 
     INDEX_NAME = "ta_config"
 
-    def __init__(self):
-        """Initialize the Elasticsearch config store."""
-        pass
-
     def _get_doc_path(self, key: str) -> str:
         """Get the ES document path for a key."""
         return f"{self.INDEX_NAME}/_doc/{key}"
@@ -51,7 +47,7 @@ class ElasticsearchConfigStore(ConfigStore):
         """Get the ES update path for a key."""
         return f"{self.INDEX_NAME}/_update/{key}"
 
-    def get(self, key: str) -> tuple[dict[str, Any] | None, int]:
+    def get(self, key: str) -> dict[str, Any]:
         """
         Retrieve configuration from Elasticsearch.
 
@@ -59,20 +55,22 @@ class ElasticsearchConfigStore(ConfigStore):
             key: Document ID in ta_config index
 
         Returns:
-            Tuple of (document source, status code)
+            Configuration dict
+
+        Raises:
+            ConfigNotFoundError: If key doesn't exist
         """
         path = self._get_doc_path(key)
         response, status_code = ElasticWrap(path).get(print_error=False)
 
         if status_code == 200:
-            return response.get("_source"), status_code
+            return response.get("_source")
         elif status_code == 404:
-            return None, status_code
+            raise ConfigNotFoundError(key)
         else:
-            # Other errors
-            return None, status_code
+            raise ValueError(f"Elasticsearch error: {status_code} - {response}")
 
-    def set(self, key: str, value: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    def set(self, key: str, value: dict[str, Any]) -> None:
         """
         Store or replace configuration in Elasticsearch.
 
@@ -80,14 +78,16 @@ class ElasticsearchConfigStore(ConfigStore):
             key: Document ID in ta_config index
             value: Complete document to store
 
-        Returns:
-            Tuple of (ES response, status code)
+        Raises:
+            ValueError: If Elasticsearch returns an error
         """
         path = self._get_doc_path(key)
         response, status_code = ElasticWrap(path).post(value)
-        return response, status_code
 
-    def update(self, key: str, updates: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        if status_code not in (200, 201):
+            raise ValueError(f"Elasticsearch error: {status_code} - {response}")
+
+    def update(self, key: str, updates: dict[str, Any]) -> None:
         """
         Update specific fields in Elasticsearch document.
 
@@ -97,28 +97,38 @@ class ElasticsearchConfigStore(ConfigStore):
             key: Document ID in ta_config index
             updates: Fields to update (will be merged)
 
-        Returns:
-            Tuple of (ES response, status code)
+        Raises:
+            ConfigNotFoundError: If key doesn't exist
+            ValueError: If Elasticsearch returns an error
         """
         path = self._get_update_path(key)
         # ES update API requires wrapping updates in "doc"
         data = {"doc": updates}
         response, status_code = ElasticWrap(path).post(data)
-        return response, status_code
 
-    def delete(self, key: str) -> tuple[dict[str, Any], int]:
+        if status_code == 404:
+            raise ConfigNotFoundError(key)
+        elif status_code != 200:
+            raise ValueError(f"Elasticsearch error: {status_code} - {response}")
+
+    def delete(self, key: str) -> None:
         """
         Delete configuration from Elasticsearch.
 
         Args:
             key: Document ID in ta_config index
 
-        Returns:
-            Tuple of (ES response, status code)
+        Raises:
+            ConfigNotFoundError: If key doesn't exist
+            ValueError: If Elasticsearch returns an error
         """
         path = self._get_doc_path(key)
         response, status_code = ElasticWrap(path).delete()
-        return response, status_code
+
+        if status_code == 404:
+            raise ConfigNotFoundError(key)
+        elif status_code != 200:
+            raise ValueError(f"Elasticsearch error: {status_code} - {response}")
 
     def exists(self, key: str) -> bool:
         """
@@ -130,8 +140,11 @@ class ElasticsearchConfigStore(ConfigStore):
         Returns:
             True if document exists, False otherwise
         """
-        _, status_code = self.get(key)
-        return status_code == 200
+        try:
+            self.get(key)
+            return True
+        except ConfigNotFoundError:
+            return False
 
     def list_keys(self, prefix: str | None = None) -> list[str]:
         """
@@ -158,7 +171,7 @@ class ElasticsearchConfigStore(ConfigStore):
         response, status_code = ElasticWrap(path).get(data=query)
 
         if status_code != 200:
-            return []
+            raise ValueError(f"Elasticsearch error: {status_code} - {response}")
 
         # Extract document IDs from hits
         hits = response.get("hits", {}).get("hits", [])

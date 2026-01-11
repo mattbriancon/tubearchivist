@@ -10,7 +10,7 @@ from typing import Literal, TypedDict
 
 import requests
 from appsettings.src.snapshot import ElasticSnapshot
-from common.src.config_store_factory import get_config_store_singleton
+from common.src.config_store_factory import get_config_store
 from common.src.ta_redis import RedisArchivist
 from django.conf import settings
 
@@ -102,16 +102,12 @@ class AppConfig:
     }
 
     def __init__(self):
-        self.store = get_config_store_singleton()
+        self.store = get_config_store()
         self.config = self.get_config()
 
     def get_config(self) -> AppConfigType:
         """get config from datastore"""
-        config, status_code = self.store.get(self.CONFIG_KEY)
-        if status_code != 200:
-            raise ValueError(f"no config found for key {self.CONFIG_KEY}")
-
-        return config  # type: ignore
+        return self.store.get(self.CONFIG_KEY)  # type: ignore
 
     def update_config(self, data: dict) -> AppConfigType:
         """update single config value"""
@@ -126,10 +122,7 @@ class AppConfig:
             else:
                 new_config[key] = value
 
-        response, status_code = self.store.set(self.CONFIG_KEY, new_config)
-        if status_code not in (200, 201):
-            print(response)
-
+        self.store.set(self.CONFIG_KEY, new_config)
         self.config = new_config
 
         return new_config
@@ -156,7 +149,7 @@ class AppConfig:
 
     def sync_defaults(self):
         """sync defaults at startup, needs to be called with __new__"""
-        return self.store.set(self.CONFIG_KEY, self.CONFIG_DEFAULTS)
+        self.store.set(self.CONFIG_KEY, self.CONFIG_DEFAULTS)
 
     def add_new_defaults(self) -> list[str]:
         """add new default config values to ES, called at startup"""

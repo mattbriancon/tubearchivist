@@ -1,12 +1,13 @@
 """
 Functionality:
-- read and write user config backed by ES
+- read and write user config
 - encapsulate persistence of user properties
 """
 
 from typing import TypedDict
 
-from common.src.config_store_factory import get_config_store_singleton
+from common.src.config_store_factory import get_config_store
+from common.src.interfaces.config_store import ConfigNotFoundError
 
 
 class UserConfigType(TypedDict, total=False):
@@ -61,7 +62,7 @@ class UserConfig:
 
     def __init__(self, user_id: str):
         self._user_id: str = user_id
-        self.store = get_config_store_singleton()
+        self.store = get_config_store()
         self._config: UserConfigType = self.get_config()
 
     @property
@@ -80,10 +81,7 @@ class UserConfig:
     def set_value(self, key: str, value: str | bool | int):
         """Set or replace a configuration value for the user"""
         updates = {"config": {key: value}}
-        response, status = self.store.update(self.config_key, updates)
-        if status < 200 or status > 299:
-            raise ValueError(f"Failed storing user value {status}: {response}")
-
+        self.store.update(self.config_key, updates)
         print(f"User {self._user_id} value '{key}' change: to {value}")
 
     def get_config(self) -> UserConfigType:
@@ -91,31 +89,27 @@ class UserConfig:
         if not self._user_id:
             raise ValueError("no user_id passed")
 
-        data, status = self.store.get(self.config_key)
-        if status == 404:
+        try:
+            data = self.store.get(self.config_key)
+            config = self.sync_new_defaults(data["config"])  # type: ignore
+        except ConfigNotFoundError:
             self.sync_defaults()
             config = self._DEFAULT_USER_SETTINGS
-        else:
-            config = self.sync_new_defaults(data["config"])  # type: ignore
 
         return config
 
     def update_config(self, to_update: dict) -> None:
         """update config object"""
         updates = {"config": to_update}
-        response, status = self.store.update(self.config_key, updates)
-        if status < 200 or status > 299:
-            raise ValueError(f"Failed storing user value {status}: {response}")
+        self.store.update(self.config_key, updates)
 
         for key, value in to_update.items():
             print(f"User {self._user_id} value '{key}' change: to {value}")
 
     def sync_defaults(self):
-        """set initial defaults on 404"""
-        response, _ = self.store.set(
-            self.config_key, {"config": self._DEFAULT_USER_SETTINGS}
-        )
-        print(f"set default config for user {self._user_id}: {response}")
+        """set initial defaults when config doesn't exist"""
+        self.store.set(self.config_key, {"config": self._DEFAULT_USER_SETTINGS})
+        print(f"set default config for user {self._user_id}")
 
     def sync_new_defaults(self, config):
         """sync new defaults"""
