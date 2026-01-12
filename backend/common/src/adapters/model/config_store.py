@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 from common.src.interfaces.config_store import ConfigNotFoundError, ConfigStore
+from django.db import transaction
 
 
 class ModelConfigStore(ConfigStore):
@@ -77,9 +78,9 @@ class ModelConfigStore(ConfigStore):
         Update specific fields in the configuration.
 
         Performs a partial update by:
-        1. Retrieving the existing document
+        1. Selecting the row for update (with lock)
         2. Merging the updates (recursive for nested dicts)
-        3. Storing the merged result
+        3. Saving the merged result atomically
 
         Args:
             key: Configuration key
@@ -89,14 +90,20 @@ class ModelConfigStore(ConfigStore):
             ConfigNotFoundError: If key doesn't exist
             ValueError: If updates cannot be serialized
         """
-        # Get existing config (will raise ConfigNotFoundError if not found)
-        existing_data = self.get(key)
-
-        # Merge updates into existing data
-        merged_data = self._deep_merge(existing_data, updates)
-
-        # Store the merged result
-        self.set(key, merged_data)
+        try:
+            with transaction.atomic():
+                # Lock the row for update to prevent race conditions
+                config_obj = self.model.objects.select_for_update().get(key=key)
+                existing_data = json.loads(config_obj.value)
+                merged_data = self._deep_merge(existing_data, updates)
+                config_obj.value = json.dumps(merged_data)
+                config_obj.save(update_fields=["value"])
+        except self.model.DoesNotExist:
+            raise ConfigNotFoundError(key)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON for key {key}: {e}")
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Cannot serialize updates for key {key}: {e}")
 
     def delete(self, key: str) -> None:
         """
@@ -108,10 +115,8 @@ class ModelConfigStore(ConfigStore):
         Raises:
             ConfigNotFoundError: If key doesn't exist
         """
-        try:
-            config_obj = self.model.objects.get(key=key)
-            config_obj.delete()
-        except self.model.DoesNotExist:
+        deleted_count, _ = self.model.objects.filter(key=key).delete()
+        if deleted_count == 0:
             raise ConfigNotFoundError(key)
 
     def exists(self, key: str) -> bool:
