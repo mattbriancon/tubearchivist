@@ -239,6 +239,44 @@ Test coverage:
 4. Implement Redis replacement for cache/queue operations
 5. Add database indexes for commonly filtered fields
 
+## Concurrent Workers & Queue Safety
+
+The model backend implementation includes **atomic queue operations** to safely support multiple concurrent download workers.
+
+### How It Works
+
+When using the model backend for `ta_download`, the system uses PostgreSQL/MySQL row-level locking (SELECT FOR UPDATE with SKIP LOCKED) to ensure:
+
+1. **No Duplicate Processing** - Multiple workers never claim the same job
+2. **No Blocking** - Workers skip locked rows instead of waiting
+3. **True Atomicity** - Fetch and claim happen in a single transaction
+
+### Example: Running Multiple Workers
+
+```bash
+# Terminal 1 - Worker 1
+celery -A backend worker --loglevel=info --concurrency=2
+
+# Terminal 2 - Worker 2
+celery -A backend worker --loglevel=info --concurrency=2
+
+# Both workers can safely process the download queue without conflicts
+```
+
+### Technical Details
+
+The `claim_next_job()` method:
+- Uses `SELECT FOR UPDATE SKIP LOCKED` for row-level locking
+- Locks rows within a transaction to prevent race conditions
+- Skips locked rows so workers don't block each other
+- Atomically updates job status when claiming
+
+This is automatically used when `DOCUMENT_STORE_BACKEND=model`.
+
+### Elasticsearch Backend
+
+The Elasticsearch backend doesn't support row-level locking, but ES has built-in versioning and optimistic concurrency control. For production use with ES and multiple workers, consider implementing optimistic locking using the `_version` field.
+
 ## Benefits
 
 1. **Reduced Dependencies** - Can run with just PostgreSQL/MySQL instead of Elasticsearch
@@ -246,6 +284,7 @@ Test coverage:
 3. **Cost Savings** - Lower resource usage for self-hosted instances
 4. **Flexibility** - Choose backend based on needs and infrastructure
 5. **Upstream Compatible** - Pluggable design maintains compatibility with upstream
+6. **Concurrent Workers** - Multiple workers can safely process queue with model backend
 
 ## Examples
 
