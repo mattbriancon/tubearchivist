@@ -230,10 +230,14 @@ except ValueError:
 
 # Datastore backend configuration
 # Supported values:
-#   - "elasticsearch" (default): Use Elasticsearch ta_config index
+#   - "elasticsearch" (default): Use Elasticsearch indices
 #   - "model": Use Django ORM (works with SQLite, PostgreSQL, MySQL, etc.)
-# This controls which backend is used for configuration storage (ta_config)
+
+# Configuration storage (ta_config)
 CONFIG_STORE_BACKEND = environ.get("CONFIG_STORE_BACKEND", "elasticsearch")
+
+# Document storage (ta_video, ta_channel, ta_playlist, ta_download, ta_comment, ta_subtitle)
+DOCUMENT_STORE_BACKEND = environ.get("DOCUMENT_STORE_BACKEND", "elasticsearch")
 
 # API
 REST_FRAMEWORK = {
