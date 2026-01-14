@@ -1,6 +1,8 @@
 """interact with queue items"""
 
+from common.src.document_store_factory import get_download_store
 from common.src.es_connect import ElasticWrap
+from common.src.interfaces.document_store import DocumentNotFoundError
 
 
 class PendingInteract:
@@ -9,11 +11,22 @@ class PendingInteract:
     def __init__(self, youtube_id=False, status=False):
         self.youtube_id = youtube_id
         self.status = status
+        self._doc_store = None
+
+    @property
+    def doc_store(self):
+        """Lazy-load document store."""
+        if self._doc_store is None:
+            self._doc_store = get_download_store()
+        return self._doc_store
 
     def delete_item(self):
         """delete single item from pending"""
-        path = f"ta_download/_doc/{self.youtube_id}"
-        _, _ = ElasticWrap(path).delete(refresh=True)
+        try:
+            self.doc_store.delete(self.youtube_id)
+        except DocumentNotFoundError:
+            # Already deleted, that's fine
+            pass
 
     def delete_bulk(self, channel_id: str | None, vid_type: str | None):
         """delete all matching item by status"""
@@ -75,24 +88,23 @@ class PendingInteract:
     def update_status(self):
         """update status of pending item"""
         if self.status == "priority":
-            data = {
-                "doc": {
-                    "status": "pending",
-                    "auto_start": True,
-                    "message": None,
-                }
+            updates = {
+                "status": "pending",
+                "auto_start": True,
+                "message": None,
             }
         else:
-            data = {"doc": {"status": self.status}}
+            updates = {"status": self.status}
 
-        path = f"ta_download/_update/{self.youtube_id}/?refresh=true"
-        _, _ = ElasticWrap(path).post(data=data)
+        self.doc_store.update(self.youtube_id, updates)
 
     def get_item(self):
         """return pending item dict"""
-        path = f"ta_download/_doc/{self.youtube_id}"
-        response, status_code = ElasticWrap(path).get()
-        return response["_source"], status_code
+        try:
+            document = self.doc_store.get(self.youtube_id)
+            return document, 200
+        except DocumentNotFoundError:
+            return None, 404
 
     def get_channel(self):
         """

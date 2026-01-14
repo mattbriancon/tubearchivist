@@ -6,7 +6,9 @@ functionality:
 import math
 
 from appsettings.src.config import AppConfig
+from common.src.document_store_factory import get_document_store
 from common.src.es_connect import ElasticWrap
+from common.src.interfaces.document_store import DocumentNotFoundError
 from download.src.yt_dlp_base import YtWrap
 from user.src.user_config import UserConfig
 
@@ -29,6 +31,14 @@ class YouTubeItem:
         self.error = None
         self.youtube_meta = False
         self.json_data = False
+        self._doc_store = None
+
+    @property
+    def doc_store(self):
+        """Lazy-load document store to avoid circular imports."""
+        if self._doc_store is None:
+            self._doc_store = get_document_store(self.index_name)
+        return self._doc_store
 
     def build_yt_url(self):
         """build youtube url"""
@@ -54,34 +64,41 @@ class YouTubeItem:
         ).extract(url)
 
     def get_from_es(self):
-        """get indexed data from elastic search"""
-        print(f"{self.youtube_id}: get metadata from es")
-        response, _ = ElasticWrap(f"{self.es_path}").get()
-        source = response.get("_source")
-        self.json_data = source
+        """get indexed data from document store"""
+        print(f"{self.youtube_id}: get metadata from document store")
+        try:
+            self.json_data = self.doc_store.get(self.youtube_id)
+        except DocumentNotFoundError:
+            self.json_data = None
 
     def upload_to_es(self):
-        """add json_data to elastic"""
-        _, _ = ElasticWrap(self.es_path).put(self.json_data, refresh=True)
+        """add json_data to document store"""
+        # Upsert: delete if exists, then create
+        # This ensures full replacement like ES PUT behavior
+        if self.doc_store.exists(self.youtube_id):
+            self.doc_store.delete(self.youtube_id)
+        self.doc_store.create(self.youtube_id, self.json_data)
 
     def deactivate(self):
-        """deactivate document in es"""
+        """deactivate document in document store"""
         print(f"{self.youtube_id}: deactivate document")
         key_match = {
             "ta_video": "active",
             "ta_channel": "channel_active",
             "ta_playlist": "playlist_active",
         }
-        path = f"{self.index_name}/_update/{self.youtube_id}?refresh=true"
-        data = {
-            "script": f"ctx._source.{key_match.get(self.index_name)} = false"
-        }
-        _, _ = ElasticWrap(path).post(data)
+        active_key = key_match.get(self.index_name)
+        if active_key:
+            self.doc_store.update(self.youtube_id, {active_key: False})
 
     def del_in_es(self):
-        """delete item from elastic search"""
-        print(f"{self.youtube_id}: delete from es")
-        _, _ = ElasticWrap(self.es_path).delete(refresh=True)
+        """delete item from document store"""
+        print(f"{self.youtube_id}: delete from document store")
+        try:
+            self.doc_store.delete(self.youtube_id)
+        except DocumentNotFoundError:
+            # Already deleted, that's fine
+            pass
 
 
 class Pagination:
