@@ -178,6 +178,77 @@ class ModelDocumentStore(DocumentStore):
 
         return True
 
+    def claim_next_job(
+        self,
+        filters: dict[str, Any],
+        sort: list[tuple[str, str]],
+        claim_updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        Atomically fetch and claim the next job using SELECT FOR UPDATE.
+
+        This provides true atomicity for queue operations with multiple workers.
+        Uses row-level locking to prevent race conditions.
+        """
+        with transaction.atomic():
+            # Build queryset with filters
+            queryset = self.model.objects.all()
+
+            # We need to filter in the database for efficiency
+            # For simple filters, we can use Q objects
+            q_filters = Q()
+            for key, value in (filters or {}).items():
+                # For nested filters like "status", we need to deserialize
+                # For now, we'll fetch all and filter in-memory for complex cases
+                # But optimize for common case of simple top-level filters
+                pass
+
+            # Get all candidates and filter in-memory
+            # This is not ideal but works generically
+            candidates = []
+            for doc in queryset.select_for_update(skip_locked=True):
+                try:
+                    data = json.loads(doc.content)
+                    data["_id"] = doc.doc_id
+
+                    # Apply filters
+                    if filters and not self._matches_filters(data, filters):
+                        continue
+
+                    candidates.append((doc, data))
+                except json.JSONDecodeError:
+                    continue
+
+            if not candidates:
+                return None
+
+            # Sort candidates
+            if sort:
+                sorted_data = self._sort_documents(
+                    [c[1] for c in candidates], sort
+                )
+                # Reorder candidates to match sorted data
+                sorted_candidates = []
+                for sorted_doc in sorted_data:
+                    for doc_obj, data in candidates:
+                        if data["_id"] == sorted_doc["_id"]:
+                            sorted_candidates.append((doc_obj, data))
+                            break
+                candidates = sorted_candidates
+
+            # Take the first one
+            doc_obj, data = candidates[0]
+
+            # Apply claim updates
+            updated_data = {**data}
+            updated_data.update(claim_updates)
+
+            # Update the document
+            doc_obj.content = json.dumps(updated_data)
+            doc_obj.save(update_fields=["content"])
+
+            return updated_data
+
     @staticmethod
     def _sort_documents(
         documents: list[dict], sort: list[tuple[str, str]]

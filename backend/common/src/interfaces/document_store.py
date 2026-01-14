@@ -153,3 +153,48 @@ class DocumentStore(ABC):
         Returns:
             Number of documents deleted
         """
+
+    def claim_next_job(
+        self,
+        filters: dict[str, Any],
+        sort: list[tuple[str, str]],
+        claim_updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        Atomically fetch and claim the next job matching filters.
+
+        This is a queue-specific operation that uses row-level locking
+        (SELECT FOR UPDATE) to safely handle multiple workers competing
+        for jobs.
+
+        Args:
+            filters: Filters to find eligible jobs (e.g., {"status": "pending"})
+            sort: Sort order (e.g., [("timestamp", "asc")])
+            claim_updates: Updates to apply when claiming (e.g., {"status": "processing"})
+
+        Returns:
+            The claimed job document, or None if no jobs available
+
+        Note:
+            - Default implementation queries then updates (not atomic)
+            - Model backend overrides with SELECT FOR UPDATE for atomicity
+            - Elasticsearch doesn't support row locking, relies on versioning
+        """
+        # Default implementation: query then update (not truly atomic)
+        # Subclasses should override for proper locking
+        results = self.query(filters=filters, sort=sort, limit=1)
+        if not results:
+            return None
+
+        job = results[0]
+        doc_id = job.get("youtube_id") or job.get("_id")
+        if not doc_id:
+            return None
+
+        try:
+            self.update(doc_id, claim_updates)
+            # Re-fetch to get updated version
+            return self.get(doc_id)
+        except (DocumentNotFoundError, Exception):
+            # Job was claimed by another worker or deleted
+            return None

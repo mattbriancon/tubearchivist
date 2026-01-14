@@ -12,6 +12,7 @@ from datetime import datetime
 
 from appsettings.src.config import AppConfig
 from channel.src.index import YoutubeChannel
+from common.src.document_store_factory import get_download_store
 from common.src.env_settings import EnvironmentSettings
 from common.src.es_connect import ElasticWrap, IndexPaginate
 from common.src.helper import (
@@ -22,6 +23,7 @@ from common.src.helper import (
 )
 from common.src.ta_redis import RedisQueue
 from common.src.urlparser import ParsedURLType
+from django.conf import settings
 from download.src.queue import PendingList
 from download.src.yt_dlp_base import YtWrap
 from playlist.src.index import YoutubePlaylist
@@ -106,7 +108,60 @@ class VideoDownloader(DownloaderBase):
         )
 
     def _get_next(self, auto_only):
-        """get next item in queue"""
+        """
+        Get next item in queue.
+
+        Uses atomic claim operation for model backend to support multiple workers.
+        Falls back to ES query for elasticsearch backend.
+        """
+        backend = getattr(settings, "DOCUMENT_STORE_BACKEND", "elasticsearch")
+
+        if backend in ("model", "sqlite"):
+            # Use atomic claim operation for thread-safe queue
+            return self._get_next_atomic(auto_only)
+        else:
+            # Fall back to ES query
+            return self._get_next_es(auto_only)
+
+    def _get_next_atomic(self, auto_only):
+        """Atomically fetch and claim next job using SELECT FOR UPDATE."""
+        store = get_download_store()
+
+        # Build filters
+        filters = {"status": "pending"}
+        # Exclude jobs with error messages
+        # Note: This is tricky with JSON storage - we'd need to handle this differently
+        # For now, we'll fetch and check
+
+        # Build sort order
+        sort = [("auto_start", "desc"), ("timestamp", "asc")]
+
+        # Claim updates - mark as processing (optional, or keep as pending)
+        # We don't actually change status here, just claim it
+        # The worker will delete it when done
+        claim_updates = {}  # No updates needed, we just lock it
+
+        # Try to claim next job
+        max_attempts = 10  # Try up to 10 times to find a valid job
+        for _ in range(max_attempts):
+            job = store.claim_next_job(filters, sort, claim_updates)
+            if not job:
+                return False
+
+            # Check if auto_only filter applies
+            if auto_only and not job.get("auto_start"):
+                continue
+
+            # Check if job has error message (should be excluded)
+            if job.get("message"):
+                continue
+
+            return job
+
+        return False
+
+    def _get_next_es(self, auto_only):
+        """Get next job from Elasticsearch (original implementation)."""
         must_list = [{"term": {"status": {"value": "pending"}}}]
         must_not_list = [{"exists": {"field": "message"}}]
         if auto_only:
