@@ -8,8 +8,10 @@ Functionality:
 from datetime import datetime
 
 from appsettings.src.config import AppConfig
+from common.src.document_store_factory import get_comment_store, get_video_store
 from common.src.es_connect import ElasticWrap
 from common.src.helper import rand_sleep
+from common.src.interfaces.document_store import DocumentNotFoundError
 from common.src.ta_redis import RedisQueue
 from download.src.yt_dlp_base import YtWrap
 
@@ -24,6 +26,22 @@ class Comments:
         self.config = config
         self.is_activated = False
         self.comments_format = False
+        self._doc_store = None
+        self._video_store = None
+
+    @property
+    def doc_store(self):
+        """Lazy-load comment document store."""
+        if self._doc_store is None:
+            self._doc_store = get_comment_store()
+        return self._doc_store
+
+    @property
+    def video_store(self):
+        """Lazy-load video document store."""
+        if self._video_store is None:
+            self._video_store = get_video_store()
+        return self._video_store
 
     def build_json(self, upload: bool = False):
         """build json document for es"""
@@ -143,29 +161,33 @@ class Comments:
         return cleaned_comment
 
     def upload_comments(self):
-        """upload comments to es"""
+        """upload comments to document store"""
         print(f"{self.youtube_id}: upload comments")
-        _, _ = ElasticWrap(self.es_path).put(self.json_data)
+        # Upsert: delete if exists, then create
+        if self.doc_store.exists(self.youtube_id):
+            self.doc_store.delete(self.youtube_id)
+        self.doc_store.create(self.youtube_id, self.json_data)
 
-        vid_path = f"ta_video/_update/{self.youtube_id}"
-        data = {
-            "doc": {"comment_count": len(self.json_data["comment_comments"])}
-        }
-        _, _ = ElasticWrap(vid_path).post(data=data)
+        # Update video with comment count
+        comment_count = len(self.json_data["comment_comments"])
+        self.video_store.update(self.youtube_id, {"comment_count": comment_count})
 
     def delete_comments(self):
-        """delete comments from es"""
+        """delete comments from document store"""
         print(f"{self.youtube_id}: delete comments")
-        _, _ = ElasticWrap(self.es_path).delete(refresh=True)
+        try:
+            self.doc_store.delete(self.youtube_id)
+        except DocumentNotFoundError:
+            # Already deleted, that's fine
+            pass
 
     def get_es_comments(self):
-        """get comments from ES"""
-        response, statuscode = ElasticWrap(self.es_path).get()
-        if statuscode == 404:
+        """get comments from document store"""
+        try:
+            return self.doc_store.get(self.youtube_id)
+        except DocumentNotFoundError:
             print(f"comments: not found {self.youtube_id}")
             return False
-
-        return response.get("_source")
 
     def reindex_comments(self):
         """update comments from youtube"""
