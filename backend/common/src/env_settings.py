@@ -40,17 +40,6 @@ class EnvironmentSettings:
     REDIS_CON: str = str(environ.get("REDIS_CON"))
     REDIS_NAME_SPACE: str = str(environ.get("REDIS_NAME_SPACE", "ta:"))
 
-    # ElasticSearch
-    ES_URL: str = str(environ.get("ES_URL"))
-    ES_PASS: str = str(environ.get("ELASTIC_PASSWORD"))
-    ES_USER: str = str(environ.get("ELASTIC_USER", "elastic"))
-    ES_SNAPSHOT_DIR: str = str(
-        environ.get(
-            "ES_SNAPSHOT_DIR", "/usr/share/elasticsearch/data/snapshot"
-        )
-    )
-    ES_DISABLE_VERIFY_SSL: bool = bool(environ.get("ES_DISABLE_VERIFY_SSL"))
-
     def get_cache_root(self):
         """get root for web server"""
         if self.CACHE_DIR.startswith("/"):
@@ -96,20 +85,8 @@ class EnvironmentSettings:
             REDIS_NAME_SPACE: {self.REDIS_NAME_SPACE}"""
         )
 
-    def print_es_paths(self):
-        """debug es conf"""
-        print(
-            f"""
-            ES_URL: {self.ES_URL}
-            ES_PASS: *****
-            ES_USER: {self.ES_USER}
-            ES_SNAPSHOT_DIR: {self.ES_SNAPSHOT_DIR}
-            ES_DISABLE_VERIFY_SSL: {self.ES_DISABLE_VERIFY_SSL}"""
-        )
-
     def print_all(self):
         """print all"""
         self.print_generic()
         self.print_paths()
         self.print_redis_conf()
-        self.print_es_paths()
