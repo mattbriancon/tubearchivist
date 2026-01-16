@@ -1,5 +1,7 @@
 """Channel models"""
 
+from datetime import datetime
+
 from django.db import models
 
 
@@ -30,3 +32,51 @@ class Channel(models.Model):
 
     def __str__(self):
         return f"{self.channel_name} ({self.channel_id})"
+
+    def to_dict(self):
+        """Convert model instance to dictionary (matching ES document structure)"""
+        return {
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "channel_banner_url": self.channel_banner_url,
+            "channel_tvart_url": self.channel_tvart_url,
+            "channel_description": self.channel_description,
+            "channel_tags": self.channel_tags,
+            "channel_active": self.channel_active,
+            "channel_subscribed": self.channel_subscribed,
+            "channel_subs": self.channel_subs,
+            "channel_last_refresh": (
+                int(self.channel_last_refresh.timestamp())
+                if self.channel_last_refresh
+                else None
+            ),
+            "channel_overwrites": self.channel_overwrites,
+            "channel_tabs": self.channel_tabs,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create or update channel from dictionary (ES document format)"""
+        # Convert timestamp to datetime if needed
+        if "channel_last_refresh" in data and isinstance(
+            data["channel_last_refresh"], int
+        ):
+            data["channel_last_refresh"] = datetime.fromtimestamp(
+                data["channel_last_refresh"]
+            )
+
+        channel_id = data.pop("channel_id")
+        channel, _ = cls.objects.update_or_create(
+            channel_id=channel_id, defaults=data
+        )
+        return channel
+
+    def sync_to_videos(self):
+        """Sync channel data to all related videos"""
+        from video.models import Video
+
+        # Update all videos with this channel's data
+        Video.objects.filter(channel_id=self.channel_id).update(
+            channel=self  # Django will handle the FK relationship
+        )
+        print(f"{self.channel_id}: synced channel data to videos")

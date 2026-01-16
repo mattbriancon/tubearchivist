@@ -1,5 +1,7 @@
 """Video models"""
 
+from datetime import datetime
+
 from django.db import models
 
 
@@ -68,6 +70,63 @@ class Video(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.youtube_id})"
+
+    def to_dict(self):
+        """Convert model instance to dictionary (matching ES document structure)"""
+        return {
+            "youtube_id": self.youtube_id,
+            "title": self.title,
+            "description": self.description,
+            "category": self.category,
+            "tags": self.tags,
+            "published": (
+                int(self.published.timestamp()) if self.published else None
+            ),
+            "vid_last_refresh": (
+                int(self.vid_last_refresh.timestamp())
+                if self.vid_last_refresh
+                else None
+            ),
+            "date_downloaded": (
+                int(self.date_downloaded.timestamp())
+                if self.date_downloaded
+                else None
+            ),
+            "active": self.active,
+            "vid_type": self.vid_type,
+            "channel": self.channel.to_dict() if self.channel else None,
+            "player": self.player,
+            "stats": self.stats,
+            "sponsorblock": self.sponsorblock,
+            "streams": self.streams,
+            "subtitles": self.subtitles,
+            "playlist": self.playlist,
+            "media_url": self.media_url,
+            "media_size": self.media_size,
+            "vid_thumb_url": self.vid_thumb_url,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create or update video from dictionary (ES document format)"""
+        # Handle nested channel data
+        channel_data = data.pop("channel", None)
+        if channel_data:
+            from channel.models import Channel
+
+            channel = Channel.from_dict(channel_data)
+            data["channel"] = channel
+
+        # Convert timestamps to datetime if needed
+        for field in ["published", "vid_last_refresh", "date_downloaded"]:
+            if field in data and isinstance(data[field], int):
+                data[field] = datetime.fromtimestamp(data[field])
+
+        youtube_id = data.pop("youtube_id")
+        video, _ = cls.objects.update_or_create(
+            youtube_id=youtube_id, defaults=data
+        )
+        return video
 
 
 class Subtitle(models.Model):

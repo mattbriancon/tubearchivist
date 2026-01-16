@@ -30,11 +30,151 @@ Each model includes:
 - Foreign key relationships between models
 - JSONField for nested/complex data structures
 
-### 2. Infrastructure Changes
+### 2. Model Helper Methods
+
+All models now include helper methods for ES compatibility:
+
+- **`to_dict()`**: Converts model instance to dictionary (matching ES document structure)
+- **`from_dict(data)`**: Creates or updates model from ES-style dictionary
+- **`sync_to_videos()`** (Channel only): Syncs channel data to related videos
+
+These methods maintain compatibility with existing ES document formats while using ORM internally.
+
+### 3. ORM Compatibility Layer
+
+Created ORM-based replacements that match ElasticWrap interface for easier migration:
+
+- **`backend/common/src/orm_wrap.py`**:
+  - `ORMWrap` class - Drop-in replacement for `ElasticWrap`
+  - `ORMPaginate` class - Drop-in replacement for `IndexPaginate`
+  - Supports same method signatures: `get()`, `put()`, `post()`, `delete()`
+  - Translates ES queries to Django ORM automatically
+
+- **`backend/common/src/orm_generic.py`**:
+  - `YouTubeItemORM` class - ORM-based replacement for `YouTubeItem`
+  - Methods: `get_from_db()`, `save_to_db()`, `delete_from_db()`, `deactivate()`
+  - Compatible aliases: `get_from_es`, `upload_to_es`, `del_in_es`
+
+### 4. ORM-Based Search
+
+- **`backend/common/src/search_orm.py`**:
+  - `SearchORM` class - Replaces ES-based SearchForm
+  - Search types: simple, video, channel, playlist, full (subtitles)
+  - Uses Django Q objects for complex queries
+  - `VideoQueryORM` class - Replaces ES query builder
+  - Supports filtering by: channel, playlist, active, vid_type, watched, height
+  - Sorting by: published, downloaded, views, likes, duration, filesize
+
+### 5. ORM-Based Aggregations
+
+- **`backend/stats/src/aggs_orm.py`**:
+  - `StatsORM` class - Replaces ES aggregations
+  - Methods for all statistics:
+    - `get_video_stats()` - Video counts, media stats, view stats
+    - `get_channel_stats()` - Channel counts and subscriber stats
+    - `get_playlist_stats()` - Playlist counts
+    - `get_download_stats()` - Download queue stats
+    - `get_watch_progress()` - Watched/unwatched breakdown
+    - `get_download_history()` - Daily download counts
+    - `get_biggest_channels()` - Channels with most videos
+    - `get_recent_videos()` - Most recently downloaded
+    - `get_popular_videos()` - Most viewed videos
+    - `get_all_stats()` - Complete statistics in one call
+
+### 6. Infrastructure Changes
 
 - **Docker Compose**: Removed Elasticsearch service and volume
 - **Environment Settings**: Removed all ES-related environment variables from `backend/common/src/env_settings.py`
 - **Migration Structure**: Created migration directories for all apps
+
+## Quick Start: Using the New ORM Layer
+
+The ORM compatibility layer allows you to start using ORM operations with minimal code changes:
+
+### Example 1: Using ORMWrap (Drop-in ElasticWrap Replacement)
+
+```python
+# OLD (ElasticWrap):
+from common.src.es_connect import ElasticWrap
+response, status = ElasticWrap("ta_channel/_doc/UC123").get()
+channel_data = response["_source"]
+
+# NEW (ORMWrap - same interface!):
+from common.src.orm_wrap import ORMWrap
+response, status = ORMWrap("ta_channel/_doc/UC123").get()
+channel_data = response["_source"]
+
+# Or use Django ORM directly:
+from channel.models import Channel
+channel = Channel.objects.get(channel_id="UC123")
+channel_data = channel.to_dict()
+```
+
+### Example 2: Using YouTubeItemORM
+
+```python
+# Create a new ORM-based channel handler:
+from common.src.orm_generic import YouTubeItemORM
+from channel.models import Channel
+
+class YoutubeChannelORM(YouTubeItemORM):
+    index_name = "ta_channel"
+    model_class = Channel
+    yt_base = "https://www.youtube.com/channel/"
+
+# Use it the same way as YoutubeChannel:
+channel = YoutubeChannelORM("UC123")
+channel.get_from_db()  # Instead of get_from_es()
+channel.save_to_db()   # Instead of upload_to_es()
+```
+
+### Example 3: Search with SearchORM
+
+```python
+from common.src.search_orm import SearchORM
+
+# Simple search across all content:
+searcher = SearchORM("python tutorial", search_type="simple")
+results = searcher.search()
+# Returns: {"videos": [...], "channels": [...], "playlists": [...]}
+
+# Video search with filters:
+searcher = SearchORM("django", search_type="video")
+results = searcher.search(filters={"active": True, "vid_type": "videos"})
+
+# Full-text subtitle search:
+searcher = SearchORM("machine learning", search_type="full")
+subtitle_results = searcher.search()
+```
+
+### Example 4: Statistics with StatsORM
+
+```python
+from stats.src.aggs_orm import StatsORM
+
+# Get all statistics:
+all_stats = StatsORM.get_all_stats()
+
+# Get specific stats:
+video_stats = StatsORM.get_video_stats()
+channel_stats = StatsORM.get_channel_stats()
+watch_progress = StatsORM.get_watch_progress()
+biggest_channels = StatsORM.get_biggest_channels(limit=10)
+```
+
+### Example 5: Video Queries with VideoQueryORM
+
+```python
+from common.src.search_orm import VideoQueryORM
+
+# Build complex video query:
+query = VideoQueryORM(
+    filters={"channel": "UC123", "active": True},
+    sort_by="published",
+    sort_order="desc"
+)
+videos = query.get_results(limit=50)
+```
 
 ## Remaining Work
 
@@ -51,7 +191,27 @@ Each model includes:
    - Transform and import into SQLite tables
    - See section below on data migration strategy
 
-### Phase 2: Replace Elasticsearch Code
+### Phase 2: Gradual Code Migration Strategy
+
+**Two Approaches:**
+
+1. **Quick Migration (Using Compatibility Layer)**:
+   - Replace `ElasticWrap` imports with `ORMWrap`
+   - Replace `IndexPaginate` imports with `ORMPaginate`
+   - Replace `YouTubeItem` with `YouTubeItemORM`
+   - Minimal code changes, maintains same interface
+   - Good for quick wins and testing
+
+2. **Complete Migration (Direct ORM Usage)**:
+   - Replace ES operations with Django ORM directly
+   - Use model methods: `.objects.get()`, `.filter()`, `.save()`, `.delete()`
+   - More maintainable long-term
+   - Better performance
+   - Requires more extensive code changes
+
+**Recommended: Start with approach #1, then gradually refactor to #2**
+
+### Phase 3: Replace Elasticsearch Code
 
 The following files/modules heavily use Elasticsearch and need to be refactored:
 
